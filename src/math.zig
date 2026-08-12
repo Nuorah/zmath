@@ -25,6 +25,10 @@ pub const Vec3 = struct {
     pub const unit_y: Vec3 = .{ .x = 0, .y = 1, .z = 0 };
     pub const unit_z: Vec3 = .{ .x = 0, .y = 0, .z = 1 };
 
+    pub fn eql(a: Vec3, b: Vec3) bool {
+        return a.x == b.x and a.y == b.y and a.z == b.z;
+    }
+
     pub fn add(a: Vec3, b: Vec3) Vec3 {
         return .{ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z };
     }
@@ -55,7 +59,7 @@ pub const Vec3 = struct {
 
     /// `v` must not have zero length.
     pub fn normalize(v: Vec3) Vec3 {
-        std.debug.assert(v != zero);
+        std.debug.assert(!v.eql(.zero));
         return scale(v, 1 / length(v));
     }
 };
@@ -123,7 +127,7 @@ pub const Mat4 = extern struct {
 
     /// `eye` and `target` must differ, and `up` must not be parallel to the view direction.
     pub fn lookAt(eye: Vec3, target: Vec3, up: Vec3, handedness: Handedness) Mat4 {
-        std.debug.assert(eye != target);
+        std.debug.assert(!eye.eql(target));
 
         const forward = Vec3.normalize(Vec3.sub(target, eye));
         const z_axis = switch (handedness) {
@@ -131,7 +135,7 @@ pub const Mat4 = extern struct {
             .left => forward,
         };
         const x_axis_unnormalized = Vec3.cross(up, z_axis);
-        std.debug.assert(x_axis_unnormalized != Vec3.zero);
+        std.debug.assert(!x_axis_unnormalized.eql(.zero));
         const x_axis = Vec3.normalize(x_axis_unnormalized);
         const y_axis = Vec3.cross(z_axis, x_axis);
 
@@ -160,7 +164,7 @@ pub const Mat4 = extern struct {
         const x_scale = focal_length / aspect_ratio;
         const y_scale = focal_length;
 
-        const z = switch (convention.handedness) {
+        const z: [3]f32 = switch (convention.handedness) {
             .right => switch (convention.depth_range) {
                 .zero_to_one => .{ far / (near - far), far * near / (near - far), -1.0 },
                 .negative_one_to_one => .{ (far + near) / (near - far), 2 * far * near / (near - far), -1.0 },
@@ -211,3 +215,98 @@ pub const Mat4 = extern struct {
         );
     }
 };
+
+// Tests
+
+test "Vec3.normalize preserves a unit vector" {
+    try std.testing.expectEqual(Vec3.unit_x, Vec3.normalize(Vec3.unit_x));
+}
+
+test "Vec3.normalize scales a vector to unit length" {
+    const normalized = Vec3.normalize(.{ .x = 3, .y = 4, .z = 0 });
+    try std.testing.expectEqual(@as(f32, 0.6), normalized.x);
+    try std.testing.expectEqual(@as(f32, 0.8), normalized.y);
+    try std.testing.expectEqual(@as(f32, 0), normalized.z);
+}
+
+test "Mat4.lookAt is identity for an origin right-handed camera" {
+    const view = Mat4.lookAt(Vec3.zero, .{ .x = 0, .y = 0, .z = -1 }, Vec3.unit_y, .right);
+    try std.testing.expectEqual(Mat4.identity, view);
+}
+
+test "Mat4.lookAt transforms the eye to the origin" {
+    const eye = Vec3{ .x = 2, .y = 3, .z = 4 };
+    const view = Mat4.lookAt(eye, .{ .x = 2, .y = 3, .z = 3 }, Vec3.unit_y, .right);
+    try std.testing.expectEqual(Vec4.fromVec3(Vec3.zero, 1), Mat4.mulVec4(view, Vec4.fromVec3(eye, 1)));
+}
+
+test "Mat4.lookAt maps targets along the handedness forward axis" {
+    const right_handed = Mat4.lookAt(Vec3.zero, .{ .x = 0, .y = 0, .z = -2 }, Vec3.unit_y, .right);
+    try std.testing.expectEqual(
+        Vec4{ .x = 0, .y = 0, .z = -2, .w = 1 },
+        Mat4.mulVec4(right_handed, .{ .x = 0, .y = 0, .z = -2, .w = 1 }),
+    );
+
+    const left_handed = Mat4.lookAt(Vec3.zero, .{ .x = 0, .y = 0, .z = 2 }, Vec3.unit_y, .left);
+    try std.testing.expectEqual(
+        Vec4{ .x = 0, .y = 0, .z = 2, .w = 1 },
+        Mat4.mulVec4(left_handed, .{ .x = 0, .y = 0, .z = 2, .w = 1 }),
+    );
+}
+
+test "Mat4.perspective maps near and far planes to the depth range" {
+    const cases = [_]struct {
+        convention: ProjectionConvention,
+        near_z: f32,
+        far_z: f32,
+        near_depth: f32,
+        far_depth: f32,
+    }{
+        .{ .convention = .{ .handedness = .right, .depth_range = .zero_to_one }, .near_z = -1, .far_z = -11, .near_depth = 0, .far_depth = 1 },
+        .{ .convention = .{ .handedness = .right, .depth_range = .negative_one_to_one }, .near_z = -1, .far_z = -11, .near_depth = -1, .far_depth = 1 },
+        .{ .convention = .{ .handedness = .left, .depth_range = .zero_to_one }, .near_z = 1, .far_z = 11, .near_depth = 0, .far_depth = 1 },
+        .{ .convention = .{ .handedness = .left, .depth_range = .negative_one_to_one }, .near_z = 1, .far_z = 11, .near_depth = -1, .far_depth = 1 },
+    };
+
+    for (cases) |case| {
+        const projection = Mat4.perspective(std.math.pi / 2.0, 2, 1, 11, case.convention);
+        const near_clip = Mat4.mulVec4(projection, .{ .x = 0, .y = 0, .z = case.near_z, .w = 1 });
+        const far_clip = Mat4.mulVec4(projection, .{ .x = 0, .y = 0, .z = case.far_z, .w = 1 });
+        try std.testing.expectApproxEqAbs(case.near_depth, near_clip.z / near_clip.w, 0.0001);
+        try std.testing.expectApproxEqAbs(case.far_depth, far_clip.z / far_clip.w, 0.0001);
+    }
+}
+
+test "Mat4.perspective applies vertical FOV and aspect ratio" {
+    const projection = Mat4.perspective(std.math.pi / 2.0, 2, 1, 11, .{ .handedness = .right, .depth_range = .zero_to_one });
+    const clip = Mat4.mulVec4(projection, .{ .x = 2, .y = 1, .z = -1, .w = 1 });
+    try std.testing.expectApproxEqAbs(@as(f32, 1), clip.x / clip.w, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), clip.y / clip.w, 0.0001);
+}
+
+test "Mat4.orthographic maps bounds and depth range" {
+    const cases = [_]struct {
+        convention: ProjectionConvention,
+        near_z: f32,
+        far_z: f32,
+        near_depth: f32,
+        far_depth: f32,
+    }{
+        .{ .convention = .{ .handedness = .right, .depth_range = .zero_to_one }, .near_z = -1, .far_z = -11, .near_depth = 0, .far_depth = 1 },
+        .{ .convention = .{ .handedness = .right, .depth_range = .negative_one_to_one }, .near_z = -1, .far_z = -11, .near_depth = -1, .far_depth = 1 },
+        .{ .convention = .{ .handedness = .left, .depth_range = .zero_to_one }, .near_z = 1, .far_z = 11, .near_depth = 0, .far_depth = 1 },
+        .{ .convention = .{ .handedness = .left, .depth_range = .negative_one_to_one }, .near_z = 1, .far_z = 11, .near_depth = -1, .far_depth = 1 },
+    };
+
+    for (cases) |case| {
+        const projection = Mat4.orthographic(-2, 6, -3, 5, 1, 11, case.convention);
+        const near_corner = Mat4.mulVec4(projection, .{ .x = -2, .y = -3, .z = case.near_z, .w = 1 });
+        const far_corner = Mat4.mulVec4(projection, .{ .x = 6, .y = 5, .z = case.far_z, .w = 1 });
+        try std.testing.expectApproxEqAbs(@as(f32, -1), near_corner.x, 0.0001);
+        try std.testing.expectApproxEqAbs(@as(f32, -1), near_corner.y, 0.0001);
+        try std.testing.expectApproxEqAbs(case.near_depth, near_corner.z, 0.0001);
+        try std.testing.expectApproxEqAbs(@as(f32, 1), far_corner.x, 0.0001);
+        try std.testing.expectApproxEqAbs(@as(f32, 1), far_corner.y, 0.0001);
+        try std.testing.expectApproxEqAbs(case.far_depth, far_corner.z, 0.0001);
+    }
+}
