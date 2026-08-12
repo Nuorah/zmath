@@ -1,0 +1,26 @@
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+
+    const zmath_mod = b.addModule("zmath", .{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+    });
+
+    const tests = b.addTest(.{
+        .root_module = zmath_mod,
+    });
+
+    const exe_check = b.addExecutable(.{
+        .name = "torus_of_life",
+        .root_module = zmath_mod,
+    });
+
+    const check = b.step("check", "Check if torus_of_life compiles");
+    check.dependOn(&exe_check.step);
+
+    const run_tests = b.addRunArtifact(tests);
+    const test_step = b.step("test", "Run library tests");
+    test_step.dependOn(&run_tests.step);
+}
