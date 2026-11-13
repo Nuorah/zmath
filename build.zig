@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const exe_check = b.addExecutable(.{
-        .name = "torus_of_life",
+        .name = "zmath",
         .root_module = zmath_mod,
     });
 
