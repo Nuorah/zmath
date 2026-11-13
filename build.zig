@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
         .root_module = zmath_mod,
     });
 
-    const check = b.step("check", "Check if torus_of_life compiles");
+    const check = b.step("check", "Check if zmath compiles");
     check.dependOn(&exe_check.step);
 
     const run_tests = b.addRunArtifact(tests);
